@@ -61,14 +61,12 @@ class IsZeroResult(bytes):
 
 def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int = int(1e4)) -> str:
     bytes_selector = to_bytes(selector)
-    vm = Vm(code=to_bytes(code), calldata=CallData(bytes_selector))
-    gas_used = 0
-    inside_function = False
-    args: dict[int, str] = {}
-    # print(len(vm.code)) 这个值为2130说明vm中的code是整个字节码
+    vm = Vm(code=to_bytes(code), calldata=CallData(bytes_selector)) # 传入当前合约的runtime code 创建执行当前合约字节码的EVM，初始化的时候calldata中应该只包含函数选择器，每次处理的是单个函数
+    gas_used = 0 # 消耗的gas，我认为没用 
+    inside_function = False # 判断当前操作码是否是在函数里面，vm虚拟机仅仅只处理函数里面的字节码
+    args: dict[int, str] = {} # 创建参数字典，在calldata中的位置作为键，该参数的类型作为值
+    
     # 这个地方的逻辑：遇到对应的函数选择器之后不会再将inside_function置为False，在这个地方要想停止整个EVM，必须要：1.gas消耗完 2.报错
-    if vm.stopped == True:
-        print(1)
     while not vm.stopped:
         try:
             ret = vm.step()
@@ -86,6 +84,7 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
             print(ex)
             break
 
+        '''这段操作用来判断当前字节码是在函数中还是在函数外'''
         if inside_function is False:
             # XOR异或操作，SUB减操作也能被用来作为判断条件
             if ret[0] in {Op.EQ, Op.XOR, Op.SUB}:
@@ -96,7 +95,7 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
                     inside_function = bytes(ret[2]).endswith(bytes_selector)
             continue
 
-        match ret:
+        match ret:a
             # case (Op.CALLDATALOAD,_,_,_):
             #     print("1")
 
