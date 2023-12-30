@@ -1,5 +1,6 @@
 # 关键类 
 
+# 描述：在EVM的calldata中，除了function_selector以外的其他数据，每一个都是Arg类,或者是Arg类的子类
 class Arg(bytes):
     offset: int #该数据在CALLDATA中的位置
     dynamic: bool # 该数据是否为动态数据
@@ -14,8 +15,10 @@ class Arg(bytes):
     def __repr__(self):
         return f'arg({self.offset},{self.dynamic})'
 ## Arg类：作为CallData中每一个数据的基础类(出函数选择器外)，如果一个bytes类型的数据被CALLDATALOAD操作处理后，将该bytes类型数据升级为Arg类。拥有两个属性1.offset 该数据在CallData中的位置 2.dynamic 该数据是否是动态数据
-## 实际应用：在本项目中，EVM执行时处理的每一个数据至少都是Arg，可能是Arg的子类
+## Arg类方法：1._new_()该方法在创建一个新的Arg类的时候会自动执行，offset默认为int类型，dynamic默认为false,val表示该Arg类型的值，默认为32字节的0 2.__repr__()该方法打印当前数据的信息
+## 实际应用：在本项目中，EVM执行时CALLDATALOAD操作处理的每一个数据至少都是Arg，可能是Arg的子类
 ========================================================================================================================================================================================
+# 描述：可能是想用来作为描述动态数据长度的类
 class ArgDynamicLength(bytes):
     offset: int
 
@@ -58,6 +61,15 @@ class IsZeroResult(bytes):
 ## IsZeroResult类：如果一个Arg类的数据被ISZERO操作码进行了处理，则将该Arg类型的数据升级到IsZeroResult类型
 ========================================================================================================================================================================================
 # 关键函数：
+
+# 描述：整个function_arguments的运行流程
+'''step1：该函数首先根据输入的字节码以及函数选择器初始化一个EVM，
+   step2：在EVM没有停止的情况下，去执行每一个操作码(指令)，具体的执行逻辑在vm.py文件的_exec_opcode()函数中
+   step3：一个操作执行完之后返回值会被放到ret中，此时栈的状态被更新到操作执行之后的状态
+   step4：根据ret中的执行信息，以及栈中的状态去执行具体的参数类型判断操作(此过程同样会对栈中的状态发生改变)
+'''
+
+
 
 def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int = int(1e4)) -> str:
     bytes_selector = to_bytes(selector)
@@ -127,16 +139,14 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
             # 所以Arg类型的变量都是CALLDATALOAD操作创建,但是是有可能由别的操作升级
             # 所以这个函数会将整个CALLDATA中所有的数据全都标为Arg()类数据
             case (Op.CALLDATALOAD, _, bytes() as offset):
-                # offset表示CALLDATALOAD从calldata中取出数据的偏移量
+                # offset作为CALLDATALOAD操作的操作数，表示当前CALLDATALOAD是从calldata中哪个位置取出数据
                 off = int.from_bytes(offset, 'big')
+                # calldata中前四个字节为函数选择器，我们所维护的calldata上限大小为2**32，所以参数数据应该是存储在calldata的4-2**32字节之间
                 if off >= 4 and off < 2**32:
+                    # CALLDATALOAD的执行逻辑在vm.py中执行，执行完之后 栈顶是CALLDATALOAD从calldata中加载的数据，此时将该数据弹出，升级为Arg类型的数据后重新推入栈顶，即只要是通过CALLDATALOAD从栈中加载出来的数据都是Arg类型
                     vm.stack.pop()
-                    # 有点明白意思了,只要是通过CALLDATALOAD从栈中加载出来的数据都是Arg类型
                     vm.stack.push(Arg(offset=off))
-                    # print("1-----------------------")
-                    # print(Arg(offset=off).__repr__())
-                    # print("1-----------------------")
-                    # 加载操作无法推断类型
+                    # 单凭CALLDATALOAD对一个bytes类型的数据进行输出，不能知道参数类型，因此该偏移量off对应的参数类型为空
                     args[off] = ''
 
             # 对于ADD操作是可以创造ArgDynamic类型的数据的
