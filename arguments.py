@@ -18,7 +18,7 @@ class Arg(bytes):
 ## Arg类方法：1._new_()该方法在创建一个新的Arg类的时候会自动执行，offset默认为int类型，dynamic默认为false,val表示该Arg类型的值，默认为32字节的0 2.__repr__()该方法打印当前数据的信息
 ## 实际应用：在本项目中，EVM执行时CALLDATALOAD操作处理的每一个数据至少都是Arg，可能是Arg的子类
 ========================================================================================================================================================================================
-# 描述：可能是想用来作为描述动态数据长度的类
+# 描述：可能是想用来作为描述动态数据长度的类，也就是每一个动态类型参数的num字段的值
 class ArgDynamicLength(bytes):
     offset: int
 
@@ -69,8 +69,6 @@ class IsZeroResult(bytes):
    step4：根据ret中的执行信息，以及栈中的状态去执行具体的参数类型判断操作(此过程同样会对栈中的状态发生改变)
 '''
 
-
-
 def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int = int(1e4)) -> str:
     bytes_selector = to_bytes(selector)
     vm = Vm(code=to_bytes(code), calldata=CallData(bytes_selector)) # 传入当前合约的runtime code 创建执行当前合约字节码的EVM，初始化的时候calldata中应该只包含函数选择器，每次处理的是单个函数
@@ -112,21 +110,23 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
             continue
 
 
-        #只有函数中的操作才会执行下面的操作
+        #只有函数中的操作才会执行下面的操作，match的观看顺序应该是先case (Op.CALLDATALOAD, _, bytes() as offset)，再看其他case
         match ret:
             # case (Op.CALLDATALOAD,_,_,_):
             #     print("1")
 
-            # CALLDATASIZE没有操作数，返回calldata中数据的长度到栈中，然后这个地方的意思就是只要遇到CALLDATASIZE操作，就返回8192的长度到栈中
+            # CALLDATASIZE返回calldata中的数据长度到栈中
+            # 这里的意思是遇到CALLDATASIZE操作，将其返回的栈中的calldata中数据长度替换为8192
             case (Op.CALLDATASIZE, _):
                 vm.stack.pop()
                 vm.stack.push_uint(8192)
 
-            # 如果对于Arg()类型的数据,有一个CALLDATALOAD将其作为了操作数,则能够直接说明其为bytes类型?
+            # 第一个CALLDATALOAD的结果是Arg，如果有第二个CALLDATALOAD将第一个CALLDATALOAD的结果作为了操作数，则说明该参数类型为bytes，且第二个CALLDATALOAD取出的应该是动态数据的长度num
             # 并且将Arg()类型数据从栈中弹出,且推入ArgDynamicLength类型的数据
             case (Op.CALLDATALOAD, _, Arg() as arg):
                 args[arg.offset] = 'bytes'
                 vm.stack.pop()
+                #该CALLDATALOAD的结果是动态数据的长度，所以将栈顶元素置为ArgDynamicLength
                 v = ArgDynamicLength(offset=arg.offset)
                 vm.stack.push(v)
 
@@ -135,8 +135,9 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
                 v = Arg(offset=arg.offset, dynamic=True)
                 vm.stack.push(v)
 
+            # CALLDATALOAD(operand)：从calldata中的operand位置取出32字节的数据
+            # 这个地方应该是整个循环中第一个能匹配的case，因为只有在这个case中创建了Arg类的参数之后，其他case中的操作才能发生
             # 在这个地方生成CALLDATALOAD的操作数Arg,这个地方创建Arg类型的数据时,只会以val = 0x0000..的方式创建
-            # 所以Arg类型的变量都是CALLDATALOAD操作创建,但是是有可能由别的操作升级
             # 所以这个函数会将整个CALLDATA中所有的数据全都标为Arg()类数据
             case (Op.CALLDATALOAD, _, bytes() as offset):
                 # offset作为CALLDATALOAD操作的操作数，表示当前CALLDATALOAD是从calldata中哪个位置取出数据
