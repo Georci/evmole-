@@ -18,7 +18,7 @@ class Arg(bytes):
 ## Arg类方法：1._new_()该方法在创建一个新的Arg类的时候会自动执行，offset默认为int类型，dynamic默认为false,val表示该Arg类型的值，默认为32字节的0 2.__repr__()该方法打印当前数据的信息
 ## 实际应用：在本项目中，EVM执行时CALLDATALOAD操作处理的每一个数据至少都是Arg，可能是Arg的子类
 ========================================================================================================================================================================================
-# 描述：可能是想用来作为描述动态数据长度的类，也就是每一个动态类型参数的num字段的值
+# 描述：可能是想用来作为描述动态数据长度的类
 class ArgDynamicLength(bytes):
     offset: int
 
@@ -69,6 +69,8 @@ class IsZeroResult(bytes):
    step4：根据ret中的执行信息，以及栈中的状态去执行具体的参数类型判断操作(此过程同样会对栈中的状态发生改变)
 '''
 
+
+
 def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int = int(1e4)) -> str:
     bytes_selector = to_bytes(selector)
     vm = Vm(code=to_bytes(code), calldata=CallData(bytes_selector)) # 传入当前合约的runtime code 创建执行当前合约字节码的EVM，初始化的时候calldata中应该只包含函数选择器，每次处理的是单个函数
@@ -110,13 +112,12 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
             continue
 
 
-        #只有函数中的操作才会执行下面的操作，match的观看顺序应该是先case (Op.CALLDATALOAD, _, bytes() as offset)，再看其他case
+        #只有函数中的操作才会执行下面的操作
         match ret:
             # case (Op.CALLDATALOAD,_,_,_):
             #     print("1")
 
-            # CALLDATASIZE返回calldata中的数据长度到栈中
-            # 这里的意思是遇到CALLDATASIZE操作，将其返回的栈中的calldata中数据长度替换为8192
+            # CALLDATASIZE没有操作数，返回calldata中数据的长度到栈中，然后这个地方的意思就是只要遇到CALLDATASIZE操作，就返回8192的长度到栈中
             case (Op.CALLDATASIZE, _):
                 vm.stack.pop()
                 vm.stack.push_uint(8192)
@@ -126,7 +127,6 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
             case (Op.CALLDATALOAD, _, Arg() as arg):
                 args[arg.offset] = 'bytes'
                 vm.stack.pop()
-                #该CALLDATALOAD的结果是动态数据的长度，所以将栈顶元素置为ArgDynamicLength
                 v = ArgDynamicLength(offset=arg.offset)
                 vm.stack.push(v)
 
@@ -135,9 +135,8 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
                 v = Arg(offset=arg.offset, dynamic=True)
                 vm.stack.push(v)
 
-            # CALLDATALOAD(operand)：从calldata中的operand位置取出32字节的数据
-            # 这个地方应该是整个循环中第一个能匹配的case，因为只有在这个case中创建了Arg类的参数之后，其他case中的操作才能发生
             # 在这个地方生成CALLDATALOAD的操作数Arg,这个地方创建Arg类型的数据时,只会以val = 0x0000..的方式创建
+            # 所以Arg类型的变量都是CALLDATALOAD操作创建,但是是有可能由别的操作升级
             # 所以这个函数会将整个CALLDATA中所有的数据全都标为Arg()类数据
             case (Op.CALLDATALOAD, _, bytes() as offset):
                 # offset作为CALLDATALOAD操作的操作数，表示当前CALLDATALOAD是从calldata中哪个位置取出数据
@@ -151,6 +150,7 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
                     args[off] = ''
 
             # 对于ADD操作是可以创造ArgDynamic类型的数据的
+            # ADD(operand1,operand2)将操作数1、2相加之后返回结果到栈中，如果一个Arg类数据+4之后应该仍然是一个普通的Arg类型的数据，如果Arg类型的数据+的不是4，那Arg本身可能就是动态数据，则将栈顶元素置为ArgDynamic类型
             case (Op.ADD, _, Arg() as cd, bytes() as ot) | (Op.ADD, _, bytes() as ot, Arg() as cd):
                 # v是ADD操作的结果
                 v = vm.stack.pop()
@@ -177,11 +177,12 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
 
             # MUL(a,b):将a，b相乘
             # 如果当前操作MUL使用了bytes类型和ArgDynamicLength类型的操作数，则说明ArgDynamicLength数据的类型为uint256[]
+            # ArgDynamicLength代表动态数据的长度，EVM在对一个参数处理过程中如果出现了使用MUL操作将动态数据的长度和int类型的32值相乘，则说明该函数类型为uint256[]
             case (Op.MUL, _, ArgDynamicLength() as arg, bytes() as ot) | (Op.MUL, _, bytes() as ot, ArgDynamicLength() as arg):
                 if int.from_bytes(ot, 'big') == 32:
                     args[arg.offset] = 'uint256[]'
 
-            # AND(a,b)
+            # AND(a,b),计算a+b的结果并返回到栈顶。如果是对calldata中的数据进行处理的话，一般是用来屏蔽扩展值的。(因为无论长度为多少的数据在calldata中都会被扩展到32字节)，所以该值在被使用之前，需要从32字节恢复到原来的长度，AND就是用来屏蔽掉扩展的
             # 对于任意CALLDATA中的数据,如果是该数据被ADD操作使用,则能判断该数据为address[]、uint<M>[]、bytes<M>[]三种类型
             # 如果是对于连续的同样值的数据,例如2222,大小端存储的差别只有在左右两端补0的位置
             case (Op.AND, _, Arg() as arg, bytes() as ot) | (Op.AND, _, bytes() as ot, Arg() as arg):
@@ -207,15 +208,20 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
                             # 这里直接根据规则推出bytes<M>[]或bytes<M>
                             args[arg.offset] = f'{t}[]' if arg.dynamic else t
 
-            # 如果ISZERO操作码的操作对象是CALLDATA中的数据，则将该类型的数据转化为IsZeroResult类型的数据
+            # ISZERO(operand)，判断当前栈顶的元素是否是0，如果是返回1到栈顶，否则返回0到栈顶
+            # 如果ISZERO操作码的操作对象是CALLDATA中的数据(即Arg类型的参数)，则将栈顶元素置换为IsZeroResult类型的数据
             case (Op.ISZERO, _, Arg() as arg):
                 v = vm.stack.pop()
                 vm.stack.push(IsZeroResult(offset=arg.offset, dynamic=arg.dynamic, val=v))
-            # 如果ISZERO操作处理了IsZeroResult类型的数据：
+        
+            # 如果ISZERO操作处理了IsZeroResult类型的数据，也就是说执行了两个连续的ISZERO操作，则可以认定该参数对应的类型为bool类型
+            # 因为只有bool类型会使用两个连续的ISZERO来消除calldata的扩展
             case (Op.ISZERO, _, IsZeroResult() as arg):
                 args[arg.offset] = 'bool[]' if arg.dynamic else 'bool'
 
-            # 如果SIGNEXTEND操作处理了CALLDATA中的数据，则只能是int<M>或int<M>[]
+            
+            # SIGNEXTEND操作码，用于消除int类型的扩展，且只会对int类型的数据使用
+            # 如果SIGNEXTEND操作处理了CALLDATA中的数据，则只能是int<M>或int<M>[]，如果arg是动态类型数据则
             case (Op.SIGNEXTEND, _, s0, Arg() as arg):
                 if s0 < 32:
                     t = f'int{(s0+1)*8}'
