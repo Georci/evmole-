@@ -66,11 +66,14 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
     inside_function = False # 判断当前操作码是否是在函数里面，vm虚拟机仅仅只处理函数里面的字节码
     args: dict[int, str] = {} # 创建参数字典，在calldata中的位置作为键，该参数的类型作为值
     
-    # 这个地方的逻辑：遇到对应的函数选择器之后不会再将inside_function置为False，在这个地方要想停止整个EVM，必须要：1.gas消耗完 2.报错
+    # 在这个地方要想停止整个EVM，必须要：1.gas消耗完 2.报错
     while not vm.stopped:
         try:
+            # 关键步骤：调用EVM中的step()函数，该函数返回一个元组ret：[第一个元素是当前执行的字节码currentOp,第二个元素是当前操作消耗的gas gas_used,第三个元素是从栈顶弹出的当前字节码的操作数operand1,第四个元素是从栈顶弹出的当前字节码的操作数operand2]
+            # 注意：该过程中的operand1和operand2并不一定存在，可能为空“_”，第一个原因是有些字节码本身不存在操作数，第二个原因是有些字节码的操作数对后面的代码而言不重要。
             ret = vm.step()
             gas_used += ret[1]
+            # 当前操作消耗的gas大于gaslimit
             if gas_used > gas_limit:
                 # raise Exception(f'gas overflow: {gas_used} > {gas_limit}')
                 print("gas overflow!")
@@ -79,6 +82,7 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
                 # print(vm, '\n')
                 # print(ret)
                 pass
+        # 抛出异常
         except (StackIndexError, UnsupportedOpError) as ex:
             _ = ex
             print(ex)
@@ -86,19 +90,22 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
 
         '''这段操作用来判断当前字节码是在函数中还是在函数外'''
         if inside_function is False:
-            # XOR异或操作，SUB减操作也能被用来作为判断条件
+            # EQ判断是否相等，XOR异或操作，SUB减操作都能被用来作为判断条件
             if ret[0] in {Op.EQ, Op.XOR, Op.SUB}:
                 p = int.from_bytes(vm.stack.peek(), 'big')
                 # 这个地方是要比较是否选择当前函数，要选择当前函数执行，必然会使用判断条件判断是否要执行当前函数
-                # EQ是将栈中原本的两个操作数进行比较操作
+                # 要求判断操作的第一个操作数operand1是以输入的函数选择器为结尾，如果条件满足 inside_function会被置为true，说明后续的字节码都是在函数中的操作
                 if p == (1 if ret[0] == Op.EQ else 0):
                     inside_function = bytes(ret[2]).endswith(bytes_selector)
             continue
 
-        match ret:a
+
+        #只有函数中的操作才会执行下面的操作
+        match ret:
             # case (Op.CALLDATALOAD,_,_,_):
             #     print("1")
 
+            # CALLDATASIZE没有操作数，返回calldata中数据的长度到栈中，然后这个地方的意思就是只要遇到CALLDATASIZE操作，就返回8192的长度到栈中
             case (Op.CALLDATASIZE, _):
                 vm.stack.pop()
                 vm.stack.push_uint(8192)
