@@ -77,8 +77,10 @@ class Vm:
     # 能改变指令序号的操作码本身是：1.PUSH类，他推入数据的长度会对后续操作码序号产生影响 2.JUMP/JUMPI操作码，他跳转的目的地会决定下一个指令的序号
     def _exec_opcode(self, op: OpCode) -> tuple[int, *tuple[Any, ...]]:
         match op:
+        #n代表当前PUSH类操作和PUSH0之间的距离
             case op if op >= Op.PUSH0 and op <= Op.PUSH32:
                 n = op - Op.PUSH0
+                # arg从字节码中获取PUSH操作推入的数据
                 args = self.code[(self.pc + 1) : (self.pc + 1 + n)].rjust(32, b'\x00')
                 self.stack.push(args)
                 self.pc += n
