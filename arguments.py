@@ -79,6 +79,7 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
     args: dict[int, str] = {} # 创建参数字典，在calldata中的位置作为键，该参数的类型作为值
     
     # 在这个地方要想停止整个EVM，必须要：1.gas消耗完 2.报错
+    # 但是在本项目中所有使得EVM停止的操作都是报错，即遇到非函数参数处理的字节码时报错
     while not vm.stopped:
         try:
             # 关键步骤：调用EVM中的step()函数，该函数返回一个元组ret：[第一个元素是当前执行的字节码currentOp,第二个元素是当前操作消耗的gas gas_used,第三个元素是从栈顶弹出的当前字节码的操作数operand1,第四个元素是从栈顶弹出的当前字节码的操作数operand2]
@@ -112,7 +113,8 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
             continue
 
 
-        #只有函数中的操作才会执行下面的操作
+        #只有函数中的操作才会执行下面的匹配操作
+        # ret：[第一个元素是当前执行的字节码currentOp,第二个元素是当前操作消耗的gas gas_used,第三个元素是从栈顶弹出的当前字节码的操作数operand1,第四个元素是从栈顶弹出的当前字节码的操作数operand2]
         match ret:
             # case (Op.CALLDATALOAD,_,_,_):
             #     print("1")
@@ -184,23 +186,26 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
                     args[arg.offset] = 'uint256[]'
 
             # AND(a,b),计算a+b的结果并返回到栈顶。如果是对calldata中的数据进行处理的话，一般是用来屏蔽扩展值的。(因为无论长度为多少的数据在calldata中都会被扩展到32字节)，所以该值在被使用之前，需要从32字节恢复到原来的长度，AND就是用来屏蔽掉扩展的
-            # 对于任意CALLDATA中的数据,如果是该数据被ADD操作使用,则能判断该数据为address[]、uint<M>[]、bytes<M>[]三种类型
+            # 而对于address、uint<M>、bytes<M>、address[]、uint<M>[]、bytes<M>[]这些类型的参数，在被calldata中扩展之后都是使用AND操作屏蔽扩展
+            # AND操作屏蔽的原理是如果参数是八字节例如uint64，根据该数据在calldata中的填充方式，uint64为左填充（calldata扩展的时候在数据左侧添0到32字节），EVM会使用一个0x000000000000000000000000000000000000000000000000ffffffffffffffff来获取最后八字节的数据
             # 如果是对于连续的同样值的数据,例如2222,大小端存储的差别只有在左右两端补0的位置
             case (Op.AND, _, Arg() as arg, bytes() as ot) | (Op.AND, _, bytes() as ot, Arg() as arg):
                 v = int.from_bytes(ot, 'big')
                 if v == 0:
                     pass
-                # 下面这条判断语句用于检测0x0000ffff的情况
+                # 下面这条判断语句用于检测0x0000ffff的情况，即Arg参数在calldata中被左填充
                 # 如果是0x0000ffff的情况，v+1会将连续的f全部变成0，而将原本的0(最高位的)变成1，这样一来相与的结果就是0
                 elif (v & (v + 1)) == 0:
-                    # 0x0000ffff,以大端存储的方式进行存储
+                    # 0x0000ffff，处理左填充类型的数据
+                    # bit_length()方法用来获取一个int类型数据的有效位(不包括前导0和符号位)，从右侧最低为向最高有效位计算。所以才能用这个方法来获取具体数据的长度
                     bl = v.bit_length()
                     if bl % 8 == 0:
-                        # 所以确实不太容易检查address和uint160之间的区别
+                        # address、uint类型数据在calldata中都是被左填充
                         t = 'address' if bl == 160 else f'uint{bl}'
                         args[arg.offset] = f'{t}[]' if arg.dynamic else t
                 else:
-                    # 0xffff0000
+                    # 0xffff0000，处理右填充类型的数据
+                    # 因为要计算v的长度，所以先要将v从0xffff0000的样式转换为0x0000ffff的样式
                     v = int.from_bytes(ot, 'little')
                     if (v & (v + 1)) == 0:
                         bl = v.bit_length()
@@ -216,7 +221,7 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
                 vm.stack.push(IsZeroResult(offset=arg.offset, dynamic=arg.dynamic, val=v))
         
             # 如果ISZERO操作处理了IsZeroResult类型的数据，也就是说执行了两个连续的ISZERO操作，则可以认定该参数对应的类型为bool类型
-            # 因为只有bool类型会使用两个连续的ISZERO来消除calldata的扩展
+            # 因为只有bool类型会使用两个连续的ISZERO来消除calldata的扩展，第一个ISZERO用来消除扩展变为bool值，但是0x000000变成1，0x000001变成0，需要第二个ISZERO用来将bool值还原
             case (Op.ISZERO, _, IsZeroResult() as arg):
                 args[arg.offset] = 'bool[]' if arg.dynamic else 'bool'
 
@@ -228,7 +233,8 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
                     t = f'int{(s0+1)*8}'
                     args[arg.offset] = f'{t}[]' if arg.dynamic else t
 
-            # 只有bytes32类型数据会用到BYTE字节码
+            # BYTE(i,value):从bytes32类型的value处取出位置为i的单个字节
+            # 只有bytes32类型数据会用到BYTE字节码，所以如果Arg()数据被BYTE处理了，说明Arg一定是bytes32类型数据
             case (Op.BYTE, _, _, Arg() as arg):
                 if args[arg.offset] == '':
                     args[arg.offset] = 'bytes32'
