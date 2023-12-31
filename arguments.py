@@ -163,6 +163,7 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
                     # 如果该数据不是函数选择器,则将该数据升级为ArgDynamic
                     vm.stack.push(ArgDynamic(offset=cd.offset, val=v))
 
+            # 如果ADD操作处理了ArgDynamic类型的数据，则返回的结果仍是ArgDynamic类型，且具体的值更新为v
             case (Op.ADD, _, ArgDynamic() as cd, _) | (Op.ADD, _, _, ArgDynamic() as cd):
                 v = vm.stack.pop()
                 v = ArgDynamic(offset=cd.offset, val=v)
