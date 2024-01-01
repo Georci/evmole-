@@ -170,6 +170,7 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
                     vm.stack.push(ArgDynamic(offset=cd.offset, val=v))
 
             # 如果ADD操作处理了ArgDynamic类型的数据，则返回的结果仍是ArgDynamic类型，且具体的值更新为v
+            # 获取下一个动态数据的位置，在处理完一次动态数据之后，EVM需要在上一次动态数据的位置ArgDynamic基础上再＋一个值
             case (Op.ADD, _, ArgDynamic() as cd, _) | (Op.ADD, _, _, ArgDynamic() as cd):
                 v = vm.stack.pop()
                 v = ArgDynamic(offset=cd.offset, val=v)
