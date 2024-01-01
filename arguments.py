@@ -33,6 +33,7 @@ class ArgDynamicLength(bytes):
 
 ## ArgDynamicLength类：如果一个Arg类的数据被CALLDATALOAD操作码处理了，则将该Arg类型的数据从Arg类升级为ArgDynamicLength类型数据。
 ========================================================================================================================================================================================
+# ArgDynamic代表的是动态数据在calldata中的存储位置
 class ArgDynamic(bytes):
     offset: int
 
@@ -131,7 +132,9 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
                 vm.stack.pop()
                 v = ArgDynamicLength(offset=arg.offset)
                 vm.stack.push(v)
-
+                
+            # ArgDynamic数据作为CALLDATALOAD操作码的操作数，则将当前栈顶元素置为动态数据
+            # 也就是说ArgDynamic本身也描述的是calldata中的一个位置空间
             case (Op.CALLDATALOAD, _, ArgDynamic() as arg):
                 vm.stack.pop()
                 v = Arg(offset=arg.offset, dynamic=True)
@@ -150,7 +153,7 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
                     vm.stack.push(Arg(offset=off))
                     # 单凭CALLDATALOAD对一个bytes类型的数据进行输出，不能知道参数类型，因此该偏移量off对应的参数类型为空
                     args[off] = ''
-
+                
             # 对于ADD操作是可以创造ArgDynamic类型的数据的
             # ADD(operand1,operand2)将操作数1、2相加之后返回结果到栈中，如果一个Arg类数据+4之后应该仍然是一个普通的Arg类型的数据，如果Arg类型的数据+的不是4，那Arg本身可能就是动态数据，则将栈顶元素置为ArgDynamic类型
             case (Op.ADD, _, Arg() as cd, bytes() as ot) | (Op.ADD, _, bytes() as ot, Arg() as cd):
@@ -184,9 +187,12 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
             case (Op.MUL, _, ArgDynamicLength() as arg, bytes() as ot) | (Op.MUL, _, bytes() as ot, ArgDynamicLength() as arg):
                 if int.from_bytes(ot, 'big') == 32:
                     args[arg.offset] = 'uint256[]'
+                    
+========================================================================================================================================================================================
+#下面的代码虽然和上面的代码在同一个函数，但是画横线是用来区分，从下面的代码开始就进入了calldata中的数据的屏蔽扩展，(因为无论长度为多少的数据在calldata中都会被扩展到32字节)，所以该值在被使用之前，需要从32字节恢复到原来的长度
 
-            # AND(a,b),计算a+b的结果并返回到栈顶。如果是对calldata中的数据进行处理的话，一般是用来屏蔽扩展值的。(因为无论长度为多少的数据在calldata中都会被扩展到32字节)，所以该值在被使用之前，需要从32字节恢复到原来的长度，AND就是用来屏蔽掉扩展的
-            # 而对于address、uint<M>、bytes<M>、address[]、uint<M>[]、bytes<M>[]这些类型的参数，在被calldata中扩展之后都是使用AND操作屏蔽扩展
+            # AND(a,b),计算a+b的结果并返回到栈顶。如果是对calldata中的数据进行处理的话，对于下面几种类型的参数屏蔽扩展使用的都是AND操作
+            # address、uint<M>、bytes<M>、address[]、uint<M>[]、bytes<M>[]这些类型的参数，在被calldata中扩展之后都是使用AND操作屏蔽扩展
             # AND操作屏蔽的原理是如果参数是八字节例如uint64，根据该数据在calldata中的填充方式，uint64为左填充（calldata扩展的时候在数据左侧添0到32字节），EVM会使用一个0x000000000000000000000000000000000000000000000000ffffffffffffffff来获取最后八字节的数据
             # 如果是对于连续的同样值的数据,例如2222,大小端存储的差别只有在左右两端补0的位置
             case (Op.AND, _, Arg() as arg, bytes() as ot) | (Op.AND, _, bytes() as ot, Arg() as arg):
@@ -221,7 +227,7 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
                 vm.stack.push(IsZeroResult(offset=arg.offset, dynamic=arg.dynamic, val=v))
         
             # 如果ISZERO操作处理了IsZeroResult类型的数据，也就是说执行了两个连续的ISZERO操作，则可以认定该参数对应的类型为bool类型
-            # 因为只有bool类型会使用两个连续的ISZERO来消除calldata的扩展，第一个ISZERO用来消除扩展变为bool值，但是0x000000变成1，0x000001变成0，需要第二个ISZERO用来将bool值还原
+            # bool类型的参数使用两个连续的ISZERO来屏蔽扩展，第一个ISZERO用来消除扩展变为bool值，但是0x000000变成1，0x000001变成0，需要第二个ISZERO用来将bool值还原
             case (Op.ISZERO, _, IsZeroResult() as arg):
                 args[arg.offset] = 'bool[]' if arg.dynamic else 'bool'
 
