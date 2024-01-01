@@ -159,13 +159,14 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
             case (Op.ADD, _, Arg() as cd, bytes() as ot) | (Op.ADD, _, bytes() as ot, Arg() as cd):
                 # v是ADD操作的结果
                 v = vm.stack.pop()
-                # 如果ADD的除Arg的操作对象之外的另一个操作对象是4字节，则为Arg操作对象补充一个v之后重新放入栈中
+                # 如果是和一个calldata中的数据相加，那么这个Arg类型的数据只可能是动态数据的offset，所以此时被calldataload推入栈顶的元素应该是num字段的值
+                # 所以也就是说只有动态类型数据的offset的值才有+4这个操作，静态数据无论无何都不会出现calldata中的数据+4bytes的操作
                 if int.from_bytes(ot, 'big') == 4:
                     # 此时知道Arg的具体值,将该信息传入到栈中
                     vm.stack.push(Arg(offset=cd.offset, val=v))
-                # 所以这段代码并没有处理ADD操作之后的结果,只是完善一下ADD结果信息
                 else:
-                    # 如果该数据不是函数选择器,则将该数据升级为ArgDynamic
+                    # 如果该数据+的不是4，但是这里被calldataload推入的数据静态数据就不能+4？是的，因为静态数据如果实在程序中+4的话，其操作是会出现在参数信息处理代码段之外
+                    # 动态数据除了第一次是将offset+4 = num来获取num字段的地址之外，因为动态数据一定是在他的num字段之后，所以其余的都num+20，num+20+20 。。。不会再有+4的情况出现，对应动态数据
                     vm.stack.push(ArgDynamic(offset=cd.offset, val=v))
 
             # 如果ADD操作处理了ArgDynamic类型的数据，则返回的结果仍是ArgDynamic类型，且具体的值更新为v
