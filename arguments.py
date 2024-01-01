@@ -68,6 +68,21 @@ class IsZeroResult(bytes):
    step2：在EVM没有停止的情况下，去执行每一个操作码(指令)，具体的执行逻辑在vm.py文件的_exec_opcode()函数中
    step3：一个操作执行完之后返回值会被放到ret中，此时栈的状态被更新到操作执行之后的状态
    step4：根据ret中的执行信息，以及栈中的状态去执行具体的参数类型判断操作(此过程同样会对栈中的状态发生改变)
+   ===============================================================================================
+   再描述一下整个match的工作流程：
+    step5：
+        1.无论对应于那种类型的数据(动态还是静态)，case (Op.CALLDATALOAD, _, bytes() as offset):都是执行的第一个步骤，该过程会将calldata中出函数选择器以外的其他所有数据都转换为Arg类型的数据
+        2.如果是动态数据，相比于静态数据，会多涉及到(以下过程中所提到的位置均是指在calldata中的位置)：
+            case (Op.CALLDATALOAD, _, Arg() as arg):获取动态数据的长度num字段的位置
+            case (Op.ADD, _, Arg() as cd, bytes() as ot) | (Op.ADD, _, bytes() as ot, Arg() as cd):获取动态数据的位置，判断依据就是动态数据紧跟在他的num字段之后
+            case (Op.ADD, _, ArgDynamic() as cd, _) | (Op.ADD, _, _, ArgDynamic() as cd):获取下一个使用的动态数据的位置
+            case (Op.CALLDATALOAD, _, ArgDynamic() as arg):从相应的动态数据的位置获取对应的动态数据
+        3.模拟参数判断流程：
+            对于动态数据：
+            1>在获取函数选择器之后进入match
+            2>通过这段代码case (Op.CALLDATALOAD, _, bytes() as offset):将offset的位置转换为Arg类型数据，该位置存放的值是num字段的位置
+            3>通过case (Op.CALLDATALOAD, _, Arg() as arg):来知道动态数据num字段的位置
+            4>
 '''
 
 
