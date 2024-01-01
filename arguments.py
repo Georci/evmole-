@@ -78,11 +78,16 @@ class IsZeroResult(bytes):
             case (Op.ADD, _, ArgDynamic() as cd, _) | (Op.ADD, _, _, ArgDynamic() as cd):获取下一个使用的动态数据的位置
             case (Op.CALLDATALOAD, _, ArgDynamic() as arg):从相应的动态数据的位置获取对应的动态数据
         3.模拟参数判断流程：
-            对于动态数据：
+            对于动态数据，一般情况下，在参数判断的过程中不断地去判断参数类型：
             1>在获取函数选择器之后进入match
-            2>通过这段代码case (Op.CALLDATALOAD, _, bytes() as offset):将offset的位置转换为Arg类型数据，该位置存放的值是num字段的位置
-            3>通过case (Op.CALLDATALOAD, _, Arg() as arg):来知道动态数据num字段的位置
-            4>
+            2>通过这段代码case (Op.CALLDATALOAD, _, bytes() as offset):该case会创建一个Arg类数据来表示offset字段的位置，该位置存放的值是num字段的位置
+            3>通过case (Op.CALLDATALOAD, _, Arg() as arg):该case会创建一个ArgDynamicLength类来表示动态数据num字段的位置，也就是知道该动态数据的长度
+            4>通过case (Op.ADD, _, Arg() as cd, bytes() as ot) | (Op.ADD, _, bytes() as ot, Arg() as cd):该case创建ArgDynamic类，表示在num字段的位置上+20来获取动态参数的第一项数据的位置
+            5>通过case (Op.CALLDATALOAD, _, ArgDynamic() as arg):来讲具体的动态数据加载到栈中
+            6>在屏蔽扩展操作中参数类型不同会采用相应的扩展屏蔽操作
+            7>通过case (Op.ADD, _, ArgDynamic() as cd, _) | (Op.ADD, _, _, ArgDynamic() as cd):来加载下一个动态数据的位置
+            8>通过case (Op.CALLDATALOAD, _, ArgDynamic() as arg):来讲具体的动态数据加载到栈中
+            9>重复执行6、7、8操作
 '''
 
 
