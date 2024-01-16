@@ -254,7 +254,7 @@ def function_arguments(code: bytes | str, selector: bytes | str, gas_limit: int 
                 args[arg.offset] = 'bool[]' if arg.dynamic else 'bool'
 
             
-            # SIGNEXTEND操作码，用于消除int类型的扩展，且只会对int类型的数据使用
+            # SIGNEXTEND操作码，用于int类型的扩展，且只会对int类型的数据使用
             # 如果SIGNEXTEND操作处理了CALLDATA中的数据，则只能是int<M>或int<M>[]，如果arg是动态类型数据则
             case (Op.SIGNEXTEND, _, s0, Arg() as arg):
                 if s0 < 32:
